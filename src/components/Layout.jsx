@@ -309,7 +309,7 @@ function TopSearch() {
 }
 
 export default function Layout() {
-  const { profile, signOut, isAdmin, isSuperAdmin } = useAuth();
+  const { profile, signOut, isAdmin, isSuperAdmin, isOwner } = useAuth();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const loc = useLocation();
@@ -384,10 +384,16 @@ export default function Layout() {
             />
           </>
         )}
-        {isAdmin && (
+        {(isAdmin || isOwner) && (
           <>
             <SectionLabel>Admin</SectionLabel>
-            <NavItem m={EXTRA_NAV[1]} onClick={close} />
+            {isAdmin && <NavItem m={EXTRA_NAV[1]} onClick={close} />}
+            {isOwner && (
+              <NavItem
+                m={EXTRA_NAV.find((n) => n.key === "companies")}
+                onClick={close}
+              />
+            )}
           </>
         )}
         <div className="mt-auto flex min-h-[46px] max-h-[62px] flex-1 flex-col justify-end pt-2">

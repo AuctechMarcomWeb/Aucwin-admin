@@ -9,7 +9,9 @@ const AuthContext = createContext(null);
  * (same name as before so the rest of the app is unchanged).
  */
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(() => (getToken() ? { token: getToken() } : null));
+  const [session, setSession] = useState(() =>
+    getToken() ? { token: getToken() } : null,
+  );
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -17,7 +19,10 @@ export function AuthProvider({ children }) {
     try {
       setProfile(await getMe());
     } catch (e) {
-      if (e.status === 403 && e.code === "inactive") setProfile((p) => (p ? { ...p, is_active: false } : { is_active: false }));
+      if (e.status === 403 && e.code === "inactive")
+        setProfile((p) =>
+          p ? { ...p, is_active: false } : { is_active: false },
+        );
       else if (e.status === 401) setToken(null);
     }
   }
@@ -32,7 +37,10 @@ export function AuthProvider({ children }) {
       setSession(t ? { token: t } : null);
       if (!t) setProfile(null);
     });
-    return () => { mounted = false; off(); };
+    return () => {
+      mounted = false;
+      off();
+    };
   }, []);
 
   const value = {
@@ -41,6 +49,7 @@ export function AuthProvider({ children }) {
     loading,
     isAdmin: profile?.role === "admin" || profile?.role === "super_admin",
     isSuperAdmin: profile?.role === "super_admin",
+    isOwner: profile?.is_owner === true,
     async signIn(email, password) {
       try {
         const res = await login(email, password);
@@ -51,8 +60,13 @@ export function AuthProvider({ children }) {
         return e.message || "Sign-in failed";
       }
     },
-    async signOut() { setToken(null); setProfile(null); },
-    async refreshProfile() { if (getToken()) await loadProfile(); },
+    async signOut() {
+      setToken(null);
+      setProfile(null);
+    },
+    async refreshProfile() {
+      if (getToken()) await loadProfile();
+    },
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

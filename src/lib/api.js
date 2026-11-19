@@ -273,3 +273,10 @@ export const requestPasswordReset = (email) =>
   http.post("/api/auth/forgot", { email });
 export const resetPassword = (token, password) =>
   http.post("/api/auth/reset", { token, password });
+
+// ---------------- Companies (owner only) ----------------
+export const listCompanies = () => http.get("/api/platform/companies");
+export const createCompany = (input) =>
+  http.post("/api/platform/companies", input);
+export const updateCompany = (id, patch) =>
+  http.patch(`/api/platform/companies/${id}`, patch);

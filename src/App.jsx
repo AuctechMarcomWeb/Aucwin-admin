@@ -29,6 +29,7 @@ import NotesPage from "@/pages/Notes";
 import ChatPage from "@/pages/Chat";
 import CalendarPage from "@/pages/Calendar";
 import IntegrationsPage from "@/pages/Integrations";
+import Companies from "@/pages/Companies";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -57,6 +58,11 @@ function RequireSuperAdmin() {
   const { isSuperAdmin, profile } = useAuth();
   if (!profile) return <Spinner />;
   return isSuperAdmin ? <Outlet /> : <Navigate to="/" replace />;
+}
+function RequireOwner() {
+  const { isOwner, profile } = useAuth();
+  if (!profile) return <Spinner />;
+  return isOwner ? <Outlet /> : <Navigate to="/" replace />;
 }
 
 export default function App() {
@@ -89,6 +95,9 @@ export default function App() {
                 <Route path="tasks" element={<Tasks />} />
                 <Route element={<RequireAdmin />}>
                   <Route path="employees" element={<Employees />} />
+                </Route>
+                <Route element={<RequireOwner />}>
+                  <Route path="companies" element={<Companies />} />
                 </Route>
                 <Route path="settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

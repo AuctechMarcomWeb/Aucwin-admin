@@ -40,7 +40,13 @@ import {
 } from "@/lib/api";
 import { errMsg } from "@/lib/http";
 import { useAuth } from "@/lib/auth";
-import { LEAD_SOURCES, LEAD_STATUSES, ACTIVE_LEAD_STATUSES, normalizeLeadStatus, label } from "@/lib/types";
+import {
+  LEAD_SOURCES,
+  LEAD_STATUSES,
+  ACTIVE_LEAD_STATUSES,
+  normalizeLeadStatus,
+  label,
+} from "@/lib/types";
 import {
   ConfirmDialog,
   Modal,
@@ -730,7 +736,11 @@ export default function Leads() {
         onConfirm={() => del && remove.mutate(del.id)}
         busy={remove.isPending}
       />
-      <ImportModal open={importOpen} onClose={() => setImportOpen(false)} profiles={profiles.data ?? []} />
+      <ImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        profiles={profiles.data ?? []}
+      />
     </div>
   );
 }
@@ -738,39 +748,259 @@ export default function Leads() {
 function ImportModal({ open, onClose, profiles = [] }) {
   const qc = useQueryClient();
   const fileRef = useRef(null);
-  const [rows, setRows] = useState([]);
+  const [parsed, setParsed] = useState(null); // { all, withContact, sourceRows }
+  const [onlyContact, setOnlyContact] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+  const rows = useMemo(
+    () => (!parsed ? [] : onlyContact ? parsed.withContact : parsed.all),
+    [parsed, onlyContact],
+  );
   const preview = useMemo(() => rows.slice(0, 5), [rows]);
 
-  const cleanHeader = (value) => String(value ?? "").replace(/^\uFEFF/, "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  // "NameEn" → "nameen", "Owner Name" → "owner_name"
+  const cleanHeader = (value) =>
+    String(value ?? "")
+      .replace(/^﻿/, "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_|_$/g, "");
+  const isBlank = (v) =>
+    v === undefined ||
+    v === null ||
+    ["", "null", "none", "n/a", "na", "-", "undefined"].includes(
+      String(v).trim().toLowerCase(),
+    );
   const pickCell = (row, names) => {
-    for (const name of names) if (row[name] !== undefined && row[name] !== null && String(row[name]).trim() !== "") return String(row[name]).trim();
+    for (const name of names)
+      if (!isBlank(row[name])) return String(row[name]).trim();
     return "";
   };
+  // column names this importer understands (English exports often add "En", e.g. NameEn, BuildingNameEn)
+  const COLS = {
+    name: [
+      "name",
+      "full_name",
+      "owner_name",
+      "contact_name",
+      "lead_name",
+      "nameen",
+      "name_en",
+      "ownernameen",
+      "owner_name_en",
+      "customer_name",
+      "client_name",
+    ],
+    phone: [
+      "phone",
+      "mobile",
+      "mobile_number",
+      "mobile_no",
+      "phone_number",
+      "phone_no",
+      "contact_number",
+      "mobileno",
+      "whatsapp",
+    ],
+    email: ["email", "email_address", "e_mail", "mail"],
+    company: [
+      "company",
+      "organisation",
+      "organization",
+      "developer",
+      "company_name",
+    ],
+    staff: [
+      "staff",
+      "staff_name",
+      "assigned_to",
+      "owner",
+      "agent",
+      "sales_person",
+      "salesperson",
+    ],
+    address: ["address", "location"],
+    building: [
+      "building",
+      "building_name",
+      "buildingnameen",
+      "building_name_en",
+      "project",
+      "project_name",
+      "projectnameen",
+    ],
+    unit: [
+      "unit",
+      "unit_no",
+      "unit_number",
+      "unitnumber",
+      "flat_no",
+      "apartment",
+    ],
+    area: [
+      "area",
+      "community",
+      "areanameen",
+      "area_name_en",
+      "area_name",
+      "district",
+    ],
+    country: [
+      "country",
+      "countrynameen",
+      "country_name_en",
+      "country_name",
+      "nationality",
+    ],
+    size: ["size", "area_sqm", "size_sqm", "sqft", "size_sqft"],
+    ptype: ["property_type", "propertytypeen", "property_type_en", "type"],
+    party: ["procedurepartytypenameen", "party_type", "role"],
+    procedure: [
+      "procedurenameen",
+      "procedure_name_en",
+      "procedure",
+      "transaction_type",
+    ],
+    value: [
+      "procedurevalue",
+      "procedure_value",
+      "price",
+      "transaction_value",
+      "sale_value",
+    ],
+    date: ["date", "transaction_date", "procedure_date"],
+  };
+  const excelDate = (v) => {
+    if (isBlank(v)) return "";
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 20000 && n < 80000)
+      return new Date(Math.round((n - 25569) * 86400000)).toLocaleDateString(
+        "en-GB",
+        { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" },
+      );
+    return String(v)
+      .trim()
+      .replace(/T00:00:00(\.000)?Z?$/, "");
+  };
+  const money = (v) =>
+    Number(v) > 0 ? "AED " + Number(v).toLocaleString("en-US") : "";
+  const phoneKey = (v) => String(v || "").replace(/\D/g, "");
+
   const normaliseRows = (sourceRows) => {
     const staffIndex = new Map();
-    profiles.filter((p) => p.is_active !== false).forEach((p) => {
-      const key = String(p.full_name || "").trim().toLocaleLowerCase();
-      if (key && p.id) staffIndex.set(key, p.id);
-    });
-    return sourceRows.map((raw) => {
-      const r = Object.fromEntries(Object.entries(raw).map(([k, v]) => [cleanHeader(k), v]));
-      const name = pickCell(r, ["name", "full_name", "owner_name", "contact_name", "lead_name"]);
-      const phone = pickCell(r, ["phone", "mobile", "mobile_number", "phone_number", "contact_number"]);
-      const staff = pickCell(r, ["staff", "staff_name", "assigned_to", "owner", "agent", "sales_person", "salesperson"]);
-      const addressParts = [pickCell(r, ["address", "location"]), pickCell(r, ["building", "building_name"]), pickCell(r, ["unit", "unit_no", "unit_number"]), pickCell(r, ["country"])].filter(Boolean);
-      const staffId = staff ? staffIndex.get(staff.toLocaleLowerCase()) : undefined;
-      const notes = [pickCell(r, ["notes", "remarks", "comments"]), pickCell(r, ["status", "lead_status", "excel_status"]) ? `Excel Status: ${pickCell(r, ["status", "lead_status", "excel_status"])}` : "", staff ? `Excel Staff: ${staff}${staffId ? "" : " (not matched to a CRM employee; left unassigned)"}` : ""].filter(Boolean).join(" | ");
-      return {
-        name, phone, email: pickCell(r, ["email", "email_address"]),
-        company: pickCell(r, ["company", "organisation", "organization", "developer"]),
-        address: addressParts.join(", "),
-        source: pickCell(r, ["source", "lead_source"]).toLowerCase().replace(/\s+/g, "_"),
-        status: normalizeLeadStatus(pickCell(r, ["crm_status", "lead_stage", "stage"])),
-        estimated_value: pickCell(r, ["estimated_value", "value", "amount"]), notes,
-        ...(staffId ? { assigned_to: staffId } : {}),
-      };
-    }).filter((r) => r.name);
+    profiles
+      .filter((p) => p.is_active !== false)
+      .forEach((p) => {
+        const key = String(p.full_name || "")
+          .trim()
+          .toLocaleLowerCase();
+        if (key && p.id) staffIndex.set(key, p.id);
+      });
+    // one lead per person: rows with the same name + phone/email are merged and their properties listed in notes
+    const people = new Map();
+    for (const raw of sourceRows) {
+      const r = Object.fromEntries(
+        Object.entries(raw).map(([k, v]) => [cleanHeader(k), v]),
+      );
+      const get = (k) => pickCell(r, COLS[k]);
+      const name = get("name");
+      if (!name) continue;
+      const phone = get("phone"),
+        email = get("email");
+      const key =
+        name.toLocaleLowerCase().replace(/\s+/g, " ") +
+        "|" +
+        (phoneKey(phone) || email.toLowerCase());
+      const staff = get("staff");
+      const staffId = staff
+        ? staffIndex.get(staff.toLocaleLowerCase())
+        : undefined;
+      const unit = get("unit"),
+        building = get("building"),
+        area = get("area");
+      const property = [
+        [building, unit && "Unit " + unit, area].filter(Boolean).join(", "),
+        [get("ptype"), get("size") && get("size") + " sq m"]
+          .filter(Boolean)
+          .join(", "),
+        [get("party"), get("procedure")].filter(Boolean).join(", "),
+        money(get("value")),
+        excelDate(get("date")),
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      let p = people.get(key);
+      if (!p) {
+        p = {
+          name,
+          phone,
+          email,
+          company: get("company"),
+          address: [
+            get("address"),
+            building,
+            unit && "Unit " + unit,
+            area,
+            get("country"),
+          ]
+            .filter(Boolean)
+            .join(", "),
+          source: pickCell(r, ["source", "lead_source"])
+            .toLowerCase()
+            .replace(/\s+/g, "_"),
+          status: normalizeLeadStatus(
+            pickCell(r, ["crm_status", "lead_stage", "stage"]),
+          ),
+          estimated_value: pickCell(r, ["estimated_value", "amount"]),
+          baseNotes: [
+            pickCell(r, ["notes", "remarks", "comments"]),
+            pickCell(r, ["status", "lead_status", "excel_status"])
+              ? `Excel Status: ${pickCell(r, ["status", "lead_status", "excel_status"])}`
+              : "",
+            staff
+              ? `Excel Staff: ${staff}${staffId ? "" : " (not matched to a CRM employee; left unassigned)"}`
+              : "",
+          ].filter(Boolean),
+          properties: [],
+          assigned_to: staffId,
+        };
+        people.set(key, p);
+      }
+      if (!p.phone && phone) p.phone = phone;
+      if (!p.email && email) p.email = email;
+      if (property && !p.properties.includes(property))
+        p.properties.push(property);
+    }
+    const MAX_LINES = 15;
+    const all = [...people.values()].map(
+      ({ baseNotes, properties, assigned_to, ...lead }) => {
+        const list = properties.slice(0, MAX_LINES).map((x) => "• " + x);
+        if (properties.length > MAX_LINES)
+          list.push(`• …and ${properties.length - MAX_LINES} more`);
+        const notes = [
+          ...baseNotes,
+          properties.length
+            ? `Properties (${properties.length}):\n${list.join("\n")}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        if (lead.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lead.email))
+          lead.email = ""; // a bad email would make the row fail
+        return {
+          ...lead,
+          notes,
+          propertyCount: properties.length,
+          ...(assigned_to ? { assigned_to } : {}),
+        };
+      },
+    );
+    return {
+      all,
+      withContact: all.filter((r) => r.phone || r.email),
+      sourceRows: sourceRows.length,
+    };
   };
 
   async function unzipXlsx(file) {
@@ -779,20 +1009,30 @@ function ImportModal({ open, onClose, profiles = [] }) {
     const decoder = new TextDecoder();
     const entries = new Map();
     let offset = 0;
-    while (offset + 30 < bytes.length && view.getUint32(offset, true) === 0x04034b50) {
+    while (
+      offset + 30 < bytes.length &&
+      view.getUint32(offset, true) === 0x04034b50
+    ) {
       const method = view.getUint16(offset + 8, true);
       const compressedSize = view.getUint32(offset + 18, true);
       const nameLength = view.getUint16(offset + 26, true);
       const extraLength = view.getUint16(offset + 28, true);
-      const name = decoder.decode(bytes.slice(offset + 30, offset + 30 + nameLength));
+      const name = decoder.decode(
+        bytes.slice(offset + 30, offset + 30 + nameLength),
+      );
       const dataStart = offset + 30 + nameLength + extraLength;
       const compressed = bytes.slice(dataStart, dataStart + compressedSize);
       let content;
       if (method === 0) content = compressed;
       else if (method === 8 && typeof DecompressionStream !== "undefined") {
-        const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+        const stream = new Blob([compressed])
+          .stream()
+          .pipeThrough(new DecompressionStream("deflate-raw"));
         content = new Uint8Array(await new Response(stream).arrayBuffer());
-      } else throw new Error("This Excel file uses unsupported compression. Save it as .xlsx or CSV and try again.");
+      } else
+        throw new Error(
+          "This Excel file uses unsupported compression. Save it as .xlsx or CSV and try again.",
+        );
       entries.set(name, decoder.decode(content));
       offset = dataStart + compressedSize;
     }
@@ -801,87 +1041,191 @@ function ImportModal({ open, onClose, profiles = [] }) {
       if (!value) throw new Error(`Excel workbook is missing ${path}`);
       return new DOMParser().parseFromString(value, "application/xml");
     };
-    const sharedDoc = entries.has("xl/sharedStrings.xml") ? xml("xl/sharedStrings.xml") : null;
-    const shared = sharedDoc ? [...sharedDoc.getElementsByTagName("si")].map((si) => [...si.getElementsByTagName("t")].map((t) => t.textContent).join("")) : [];
+    const sharedDoc = entries.has("xl/sharedStrings.xml")
+      ? xml("xl/sharedStrings.xml")
+      : null;
+    const shared = sharedDoc
+      ? [...sharedDoc.getElementsByTagName("si")].map((si) =>
+          [...si.getElementsByTagName("t")].map((t) => t.textContent).join(""),
+        )
+      : [];
     const workbook = xml("xl/workbook.xml");
     const firstSheet = workbook.getElementsByTagName("sheet")[0];
     if (!firstSheet) throw new Error("No worksheet found in this Excel file.");
     const relId = firstSheet.getAttribute("r:id");
     const rels = xml("xl/_rels/workbook.xml.rels");
-    const relation = [...rels.getElementsByTagName("Relationship")].find((r) => r.getAttribute("Id") === relId);
-    if (!relation) throw new Error("Could not locate the first worksheet in this Excel file.");
+    const relation = [...rels.getElementsByTagName("Relationship")].find(
+      (r) => r.getAttribute("Id") === relId,
+    );
+    if (!relation)
+      throw new Error(
+        "Could not locate the first worksheet in this Excel file.",
+      );
     const target = relation.getAttribute("Target").replace(/^\//, "");
-    const sheetPath = target.startsWith("xl/") ? target : `xl/${target.replace(/^\.\//, "")}`;
+    const sheetPath = target.startsWith("xl/")
+      ? target
+      : `xl/${target.replace(/^\.\//, "")}`;
     const sheet = xml(sheetPath);
     const rows = [...sheet.getElementsByTagName("row")];
     if (!rows.length) return [];
     const matrix = rows.map((row) => {
       const values = [];
       [...row.getElementsByTagName("c")].forEach((cell) => {
-        const letters = (cell.getAttribute("r") || "A1").match(/[A-Z]+/i)?.[0] || "A";
+        const letters =
+          (cell.getAttribute("r") || "A1").match(/[A-Z]+/i)?.[0] || "A";
         let col = 0;
-        for (const ch of letters.toUpperCase()) col = col * 26 + ch.charCodeAt(0) - 64;
+        for (const ch of letters.toUpperCase())
+          col = col * 26 + ch.charCodeAt(0) - 64;
         const type = cell.getAttribute("t");
-        const value = type === "inlineStr" ? [...cell.getElementsByTagName("t")].map((t) => t.textContent).join("") : (cell.getElementsByTagName("v")[0]?.textContent ?? "");
+        const value =
+          type === "inlineStr"
+            ? [...cell.getElementsByTagName("t")]
+                .map((t) => t.textContent)
+                .join("")
+            : (cell.getElementsByTagName("v")[0]?.textContent ?? "");
         values[col - 1] = type === "s" ? (shared[Number(value)] ?? "") : value;
       });
       return values;
     });
     const headers = (matrix.shift() || []).map(cleanHeader);
-    return matrix.map((cells) => Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? ""])));
+    return matrix.map((cells) =>
+      Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? ""])),
+    );
   }
 
   async function parse(file) {
     try {
       const extension = file.name.split(".").pop().toLowerCase();
       let sourceRows;
-      if (["xlsx", "xlsm"].includes(extension)) sourceRows = await unzipXlsx(file);
+      if (["xlsx", "xlsm"].includes(extension))
+        sourceRows = await unzipXlsx(file);
       else if (extension === "csv") {
-        const result = await new Promise((resolve, reject) => Papa.parse(file, { header: true, skipEmptyLines: true, complete: resolve, error: reject }));
+        const result = await new Promise((resolve, reject) =>
+          Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: resolve,
+            error: reject,
+          }),
+        );
         sourceRows = result.data;
-      } else throw new Error("Please upload an .xlsx or .csv file. Legacy .xls files are not supported; save them as .xlsx first.");
-      const normalised = normaliseRows(sourceRows);
-      setRows(normalised);
-      if (!normalised.length) toast.error("No valid lead rows found. Check for an Owner Name or Name column.");
-      else toast.success(`Read ${normalised.length} lead rows`);
-    } catch (e) { toast.error(e.message || "Could not read this file"); }
+      } else
+        throw new Error(
+          "Please upload an .xlsx or .csv file. Legacy .xls files are not supported; save them as .xlsx first.",
+        );
+      const result = normaliseRows(sourceRows);
+      if (!result.all.length) {
+        setParsed(null);
+        toast.error(
+          "No lead rows found. The file needs a name column, such as Name, Owner Name or NameEn.",
+        );
+      } else {
+        setParsed(result);
+        toast.success(
+          `Found ${result.all.length.toLocaleString()} people in ${result.sourceRows.toLocaleString()} rows`,
+        );
+      }
+    } catch (e) {
+      toast.error(e.message || "Could not read this file");
+    }
+  }
+  function reset() {
+    setParsed(null);
+    setProgress("");
+    if (fileRef.current) fileRef.current.value = "";
   }
   async function submit() {
     setBusy(true);
+    const BATCH = 400; // the server takes up to 5000 rows per request; smaller batches keep each request quick
+    let done = 0,
+      imported = 0;
     try {
-      const n = await importLeads(rows);
-      toast.success(`Imported ${n} lead${n === 1 ? "" : "s"}`);
-      qc.invalidateQueries({ queryKey: ["leads"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
-      setRows([]);
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const chunk = rows
+          .slice(i, i + BATCH)
+          .map(({ propertyCount: _c, ...r }) => r);
+        setProgress(
+          `Importing ${Math.min(i + BATCH, rows.length).toLocaleString()} of ${rows.length.toLocaleString()}…`,
+        );
+        imported += await importLeads(chunk);
+        done = i + chunk.length;
+      }
+      toast.success(
+        `Imported ${imported.toLocaleString()} lead${imported === 1 ? "" : "s"}`,
+      );
+      reset();
       onClose();
     } catch (e) {
-      toast.error(errMsg(e));
+      toast.error(
+        done
+          ? `Stopped after ${done.toLocaleString()} rows (${imported.toLocaleString()} imported): ${errMsg(e)}`
+          : errMsg(e),
+      );
+      setProgress("");
     } finally {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
       setBusy(false);
     }
   }
+  const skipped = parsed ? parsed.all.length - parsed.withContact.length : 0;
   return (
-    <Modal open={open} onClose={onClose} title="Import leads from Excel or CSV" wide>
+    <Modal
+      open={open}
+      onClose={busy ? () => {} : onClose}
+      title="Import leads from Excel or CSV"
+      wide
+    >
       <p className="mb-3 text-sm text-slate-600">
-        Upload an Excel (.xlsx) or CSV file with a header row. Recognised columns:{" "}
+        Upload an Excel (.xlsx) or CSV file with a header row. Recognised
+        columns:{" "}
         <code className="rounded bg-mist px-1">
-          Owner Name / name, Mobile / phone, Email, Building, Unit, Country, Staff,
-          company, address, source, status, estimated_value, notes
+          Name / Owner Name / NameEn, Mobile / phone, Email, Building, Unit,
+          Area, Country, Staff, company, address, source, status,
+          estimated_value, notes
         </code>
-        . Staff names are matched to active CRM employees; unmatched staff remain unassigned. Excel status values are preserved in notes.
+        . Rows for the same person (same name and phone) become one lead, with
+        each property listed in its notes. Staff names are matched to active CRM
+        employees; unmatched staff remain unassigned.
       </p>
       <input
         ref={fileRef}
         type="file"
+        disabled={busy}
         accept=".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
         className="input"
         onChange={(e) => e.target.files?.[0] && parse(e.target.files[0])}
       />
-      {rows.length > 0 && (
+      {parsed && (
         <div className="mt-4">
+          <div className="mb-3 rounded-lg border border-mist-2 bg-mist/40 p-3 text-sm text-slate-700">
+            <p>
+              <b>{parsed.sourceRows.toLocaleString()}</b> rows in the file →{" "}
+              <b>{parsed.all.length.toLocaleString()}</b> people after merging
+              repeated owners.
+            </p>
+            {skipped > 0 && (
+              <label className="mt-2 flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={onlyContact}
+                  disabled={busy}
+                  onChange={(e) => setOnlyContact(e.target.checked)}
+                />
+                <span>
+                  Only import people with a phone or email{" "}
+                  <span className="text-slate-500">
+                    (skips {skipped.toLocaleString()} without contact details,
+                    such as banks and developers)
+                  </span>
+                </span>
+              </label>
+            )}
+          </div>
           <p className="mb-2 text-xs font-medium text-slate-500">
-            {rows.length} rows parsed · preview of first {preview.length}
+            {rows.length.toLocaleString()} leads to import · preview of first{" "}
+            {preview.length}
           </p>
           <div className="overflow-x-auto rounded-lg border border-mist-2">
             <table className="table">
@@ -890,39 +1234,45 @@ function ImportModal({ open, onClose, profiles = [] }) {
                   <th>Name</th>
                   <th>Phone</th>
                   <th>Email</th>
-                  <th>Company</th>
+                  <th>Address</th>
+                  <th>Properties</th>
                   <th>Assigned staff</th>
-                  <th>Source</th>
-                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {preview.map((r, i) => (
                   <tr key={i}>
                     <td>{r.name}</td>
-                    <td>{r.phone}</td>
+                    <td className="whitespace-nowrap">{r.phone}</td>
                     <td>{r.email}</td>
-                    <td>{r.company}</td>
-                    <td>{profiles.find((p) => p.id === r.assigned_to)?.full_name || "Unassigned"}</td>
-                    <td>{r.source}</td>
-                    <td>{r.status}</td>
+                    <td className="max-w-[260px] truncate" title={r.address}>
+                      {r.address}
+                    </td>
+                    <td>{r.propertyCount || "—"}</td>
+                    <td>
+                      {profiles.find((p) => p.id === r.assigned_to)
+                        ?.full_name || "Unassigned"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              className="btn-secondary"
-              onClick={() => {
-                setRows([]);
-                if (fileRef.current) fileRef.current.value = "";
-              }}
-            >
+          <div className="mt-4 flex items-center justify-end gap-2">
+            {progress && (
+              <span className="mr-auto text-sm text-slate-600">{progress}</span>
+            )}
+            <button className="btn-secondary" onClick={reset} disabled={busy}>
               Clear
             </button>
-            <button className="btn-primary" onClick={submit} disabled={busy}>
-              Import {rows.length} leads
+            <button
+              className="btn-primary"
+              onClick={submit}
+              disabled={busy || !rows.length}
+            >
+              {busy
+                ? "Importing…"
+                : `Import ${rows.length.toLocaleString()} leads`}
             </button>
           </div>
         </div>

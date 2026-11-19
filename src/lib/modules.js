@@ -12,6 +12,7 @@ import {
   Globe,
   BarChart3,
   Briefcase,
+  Building2,
 } from "lucide-react";
 
 /** Every module in the product, with its own colour. Used by the home grid, sidebar and page headers. */
@@ -148,6 +149,16 @@ export const EXTRA_NAV = [
     bg: "#CCFBF1",
     blurb: "Accounts, roles, departments",
     adminOnly: true,
+  },
+  {
+    key: "companies",
+    label: "Companies",
+    to: "/companies",
+    icon: Building2,
+    color: "#0F2F58",
+    bg: "#DCE6F2",
+    blurb: "Create and manage separate companies",
+    ownerOnly: true,
   },
 ];
 
